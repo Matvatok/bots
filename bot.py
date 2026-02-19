@@ -86,7 +86,7 @@ class Database:
     def get_user(self, user_id):
         user_id = str(user_id)
         if user_id not in self.data:
-            # СОЗДАЕМ НОВОГО ПОЛЬЗОВАТЕЛЯ (так и должно быть!)
+            # СОЗДАЕМ НОВОГО ПОЛЬЗОВАТЕЛЯ
             self.data[user_id] = {
                 'coins': 0,
                 'last_farm': None,
@@ -216,7 +216,19 @@ class Database:
         
         return results
 
-db = Database()
+# ИСПОЛЬЗУЕМ ДРУГОЕ ИМЯ ФАЙЛА, КОТОРЫЙ BOTHOST НЕ ТРОГАЕТ!
+DB_FILENAME = "my_precious_data.json"  # BotHost не знает про этот файл!
+
+# Загружаем базу
+if os.path.exists(DB_FILENAME):
+    db = Database(DB_FILENAME)
+    print(f"✅ База загружена из {DB_FILENAME}: {len(db.data)} игроков")
+else:
+    print(f"❌ Файл {DB_FILENAME} не найден!")
+    print(f"📁 Переименуй свой файл в {DB_FILENAME} через файловый менеджер")
+    # Создаем пустую базу
+    db = Database(DB_FILENAME)
+    print(f"✅ Создана новая база {DB_FILENAME}")
 
 async def send_exchange_notification(context, user_id, item):
     user_data = db.get_user(user_id)
@@ -966,20 +978,20 @@ async def restore_db(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         # 1. СОХРАНЯЕМ ТЕКУЩУЮ БАЗУ
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        backup_current = f"kme_data.json.backup_{timestamp}"
+        backup_current = f"my_precious_data.json.backup_{timestamp}"
         
-        if os.path.exists('kme_data.json'):
-            with open('kme_data.json', 'r', encoding='utf-8') as src:
+        if os.path.exists(DB_FILENAME):
+            with open(DB_FILENAME, 'r', encoding='utf-8') as src:
                 with open(backup_current, 'w', encoding='utf-8') as dst:
                     dst.write(src.read())
         
         # 2. ЗАГРУЖАЕМ СТАРУЮ БАЗУ
         file = await update.message.document.get_file()
-        await file.download_to_drive('kme_data.json')
+        await file.download_to_drive(DB_FILENAME)
         
         # 3. ПЕРЕЗАГРУЖАЕМ БАЗУ
         global db
-        db = Database()
+        db = Database(DB_FILENAME)
         
         # 4. ОТПРАВЛЯЕМ ОТЧЕТ
         message = (
@@ -1080,6 +1092,7 @@ def main():
     print(f"🎮 Уровней: {len(LEVELS)}")
     print(f"💰 Фарм: 1-2 коинов, {FARM_COOLDOWN}ч КД")
     print(f"👑 Админ ID: {ADMIN_ID}")
+    print(f"📁 Файл базы: {DB_FILENAME}")
     print("=" * 50)
     
     application = Application.builder().token(TOKEN).build()
@@ -1119,7 +1132,7 @@ def main():
     application.add_handler(CallbackQueryHandler(button_handler))
     
     print("✅ Бот запущен!")
-    print("📁 Используется файл: kme_data.json")
+    print(f"📁 Файл базы: {DB_FILENAME} (BotHost его не трогает!)")
     print("🔄 Для восстановления БД: отправьте файл и /restore_db")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
