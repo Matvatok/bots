@@ -1064,14 +1064,13 @@ async def restore_db(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"1. Отправьте файл старой базы (kme_data.json)\n"
             f"2. Напишите команду: /restore_db\n\n"
             f"⚠️ <b>ТЕКУЩАЯ БАЗА БУДЕТ ПОЛНОСТЬЮ ЗАМЕНЕНА!</b>\n"
-            f"💾 Но сначала будет создана её копия\n\n"
-            f"📊 Текущая база: {len(db.data)} игроков"
+            f"💾 Но сначала будет создана её копия"
         )
         await update.message.reply_text(message, parse_mode='HTML')
         return
     
     try:
-        # 1. СОХРАНЯЕМ ТЕКУЩУЮ БАЗУ (на всякий случай)
+        # 1. СОХРАНЯЕМ ТЕКУЩУЮ БАЗУ
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         backup_current = f"kme_data.json.backup_{timestamp}"
         
@@ -1084,7 +1083,7 @@ async def restore_db(update: Update, context: ContextTypes.DEFAULT_TYPE):
         file = await update.message.document.get_file()
         await file.download_to_drive('kme_data.json')
         
-        # 3. ПЕРЕЗАГРУЖАЕМ БАЗУ В ПАМЯТИ
+        # 3. ПЕРЕЗАГРУЖАЕМ БАЗУ
         global db
         db = Database()
         
