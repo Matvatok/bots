@@ -41,7 +41,7 @@ class Database:
     
     def load_data(self):
         if not os.path.exists(self.filename):
-            print("📝 Файл базы не найден")
+            print("📝 Файл базы не найден, создаем новый")
             return {}
         
         try:
@@ -64,8 +64,6 @@ class Database:
                     user_data['last_active'] = datetime.now().isoformat()
                 if 'admin_gifted' not in user_data:
                     user_data['admin_gifted'] = 0
-                if 'last_casino' not in user_data:
-                    user_data['last_casino'] = None
             
             print(f"✅ Успешно загружено {len(data)} пользователей")
             return data
@@ -81,12 +79,14 @@ class Database:
         try:
             with open(self.filename, 'w', encoding='utf-8') as f:
                 json.dump(self.data, f, ensure_ascii=False, indent=2)
+            print(f"💾 База сохранена ({len(self.data)} игроков)")
         except Exception as e:
             print(f"❌ Ошибка сохранения: {e}")
     
     def get_user(self, user_id):
         user_id = str(user_id)
         if user_id not in self.data:
+            # СОЗДАЕМ НОВОГО ПОЛЬЗОВАТЕЛЯ (так и должно быть!)
             self.data[user_id] = {
                 'coins': 0,
                 'last_farm': None,
@@ -96,9 +96,9 @@ class Database:
                 'total_farmed': 0,
                 'farm_count': 0,
                 'admin_gifted': 0,
-                'last_active': datetime.now().isoformat(),
-                'last_casino': None
+                'last_active': datetime.now().isoformat()
             }
+            print(f"👤 Новый пользователь {user_id} добавлен в БД")
             self.save_data()
         return self.data[user_id]
     
@@ -128,50 +128,6 @@ class Database:
             hours = wait.seconds // 3600
             minutes = (wait.seconds % 3600) // 60
             return False, f"⏳ Ждите {hours:02d}:{minutes:02d}"
-    
-    def can_play_casino(self, user_id):
-        user = self.get_user(user_id)
-        
-        if not user['last_casino']:
-            return True, "✅ Можно играть в казино!"
-        
-        last = datetime.fromisoformat(user['last_casino'])
-        now = datetime.now()
-        
-        if now - last >= timedelta(days=1):
-            return True, "✅ Можно играть в казино!"
-        else:
-            next_time = last + timedelta(days=1)
-            wait = next_time - now
-            hours = wait.seconds // 3600
-            minutes = (wait.seconds % 3600) // 60
-            return False, f"⏳ Следующая игра через {hours}ч {minutes}м"
-    
-    def play_casino(self, user_id, bet):
-        user = self.get_user(user_id)
-        
-        if bet < 1 or bet > 10:
-            return False, "❌ Ставка должна быть от 1 до 10 коинов!"
-        
-        if user['coins'] < bet:
-            return False, f"❌ Недостаточно коинов! Есть {user['coins']}, нужно {bet}"
-        
-        # 30% шанс победы
-        if random.random() < 0.3:
-            win = bet * 2
-            user['coins'] += win
-            result = f"🎉 ВЫ ВЫИГРАЛИ! +{win} коинов!"
-            win_flag = True
-        else:
-            user['coins'] -= bet
-            result = f"💔 Вы проиграли {bet} коинов..."
-            win_flag = False
-        
-        user['last_casino'] = datetime.now().isoformat()
-        user['last_active'] = datetime.now().isoformat()
-        self.save_data()
-        
-        return True, (result, win_flag, user['coins'])
     
     def add_coins(self, user_id, amount, from_farm=True, from_admin=False):
         user = self.get_user(user_id)
@@ -339,7 +295,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"🏆 <b>Уровень:</b> {level['name']}\n\n"
         "📋 <b>Основные команды:</b>\n"
         "/farm - Фармить коины\n"
-        "/casino [1-10] - Казино (раз в день)\n"
         "/balance - Баланс\n"
         "/level - Уровень\n"
         "/shop - Магазин (только в ЛС)\n"
@@ -389,68 +344,6 @@ async def farm(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(message, parse_mode='HTML')
     except:
         pass
-
-async def casino(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    db.update_user(user.id)
-    
-    # Проверка на аргументы
-    if not context.args:
-        can_play, msg = db.can_play_casino(user.id)
-        if not can_play:
-            await update.message.reply_text(f"❌ {msg}")
-            return
-        
-        message = (
-            f"🎰 <b>КАЗИНО</b>\n\n"
-            f"📝 Использование: /casino [ставка]\n"
-            f"💰 Ставка: от 1 до 10 коинов\n"
-            f"📊 Шанс победы: 30%\n"
-            f"🎁 Выигрыш: x2\n"
-            f"⏰ Можно играть раз в день\n\n"
-            f"💳 Ваш баланс: {db.get_user(user.id)['coins']} коинов"
-        )
-        await update.message.reply_text(message, parse_mode='HTML')
-        return
-    
-    # Проверка на кулдаун
-    can_play, msg = db.can_play_casino(user.id)
-    if not can_play:
-        await update.message.reply_text(f"❌ {msg}")
-        return
-    
-    # Проверка ставки
-    try:
-        bet = int(context.args[0])
-    except ValueError:
-        await update.message.reply_text("❌ Ставка должна быть числом!")
-        return
-    
-    # Играем
-    success, result = db.play_casino(user.id, bet)
-    
-    if not success:
-        await update.message.reply_text(result)
-        return
-    
-    result_text, win, new_balance = result
-    
-    if win:
-        message = (
-            f"🎰 <b>КАЗИНО</b>\n\n"
-            f"{result_text}\n\n"
-            f"💰 <b>Новый баланс:</b> {new_balance} коинов\n"
-            f"⏰ <b>Следующая игра:</b> через 24ч"
-        )
-    else:
-        message = (
-            f"🎰 <b>КАЗИНО</b>\n\n"
-            f"{result_text}\n\n"
-            f"💰 <b>Новый баланс:</b> {new_balance} коинов\n"
-            f"⏰ <b>Следующая игра:</b> через 24ч"
-        )
-    
-    await update.message.reply_text(message, parse_mode='HTML')
 
 async def balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -1064,7 +957,8 @@ async def restore_db(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"1. Отправьте файл старой базы (kme_data.json)\n"
             f"2. Напишите команду: /restore_db\n\n"
             f"⚠️ <b>ТЕКУЩАЯ БАЗА БУДЕТ ПОЛНОСТЬЮ ЗАМЕНЕНА!</b>\n"
-            f"💾 Но сначала будет создана её копия"
+            f"💾 Но сначала будет создана её копия\n\n"
+            f"📊 Текущая база: {len(db.data)} игроков"
         )
         await update.message.reply_text(message, parse_mode='HTML')
         return
@@ -1185,7 +1079,6 @@ def main():
     print(f"👥 Игроков в базе: {len(db.data)}")
     print(f"🎮 Уровней: {len(LEVELS)}")
     print(f"💰 Фарм: 1-2 коинов, {FARM_COOLDOWN}ч КД")
-    print(f"🎰 Казино: раз в день, ставка 1-10, шанс 30%")
     print(f"👑 Админ ID: {ADMIN_ID}")
     print("=" * 50)
     
@@ -1194,7 +1087,6 @@ def main():
     commands = [
         ("start", start),
         ("farm", farm),
-        ("casino", casino),
         ("balance", balance),
         ("level", level),
         ("shop", shop),
