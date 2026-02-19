@@ -8,7 +8,9 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, ContextTypes, CallbackQueryHandler
 import telegram.error
 
+# ✅ НОВЫЙ ТОКЕН (исправлен)
 TOKEN = "8130787520:AAHulnzqWno0OlDqvlpdt6fjLqno8VFnBoc"
+# ✅ НОВЫЙ АДМИН ID (исправлен)
 ADMIN_ID = 8537120818
 FARM_COOLDOWN = 4
 COMPENSATION_AMOUNT = 15
