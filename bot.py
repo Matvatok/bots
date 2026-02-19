@@ -8,8 +8,8 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, ContextTypes, CallbackQueryHandler
 import telegram.error
 
-TOKEN = "8542959870:AAH7ECRyusZRDiULPWngvcjygQ9smi-cA3E"
-ADMIN_ID = 6443845944
+TOKEN = "8130787520:AAHulnzqWno0OlDqvlpdt6fjLqno8VFnBoc"
+ADMIN_ID = 8537120818
 FARM_COOLDOWN = 4
 COMPENSATION_AMOUNT = 15
 
