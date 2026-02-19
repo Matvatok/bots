@@ -1,12 +1,15 @@
 import json
 import os
 import random
+import time
+import glob
 from datetime import datetime, timedelta
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, ContextTypes, CallbackQueryHandler
+import telegram.error
 
-TOKEN = "8130787520:AAHulnzqWno0OlDqvlpdt6fjLqno8VFnBoc"
-ADMIN_ID = 8537120818
+TOKEN = "8542959870:AAH7ECRyusZRDiULPWngvcjygQ9smi-cA3E"
+ADMIN_ID = 6443845944
 FARM_COOLDOWN = 4
 COMPENSATION_AMOUNT = 15
 
@@ -29,71 +32,94 @@ SHOP_ITEMS = {
 
 class Database:
     def __init__(self, filename="kme_data.json"):
-        self.filename = filename
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        self.filename = os.path.join(current_dir, filename)
         
-        # Флаг, что база уже существует
-        self.db_exists = os.path.exists(self.filename)
+        print(f"📁 База данных: {self.filename}")
         
-        if self.db_exists:
-            print(f"✅ База найдена, загружаем...")
-            self.data = self.load_data()
-        else:
-            print(f"⚠️ Базы нет, но мы НЕ создаем новую!")
-            print(f"📁 Загрузите файл {self.filename} вручную")
-            self.data = {}
+        self.data = self.load_data()
+        print(f"👥 Загружено игроков: {len(self.data)}")
     
     def load_data(self):
+        if not os.path.exists(self.filename):
+            print("📝 Файл базы не найден")
+            return {}
+        
         try:
             with open(self.filename, 'r', encoding='utf-8') as f:
-                return json.load(f)
-        except:
+                content = f.read().strip()
+                
+            if not content:
+                print("⚠️ Файл базы пустой")
+                return {}
+            
+            data = json.loads(content)
+            
+            if not isinstance(data, dict):
+                print("❌ Неверный формат базы данных")
+                return {}
+            
+            # Конвертируем старые данные
+            for user_id, user_data in data.items():
+                if 'last_active' not in user_data:
+                    user_data['last_active'] = datetime.now().isoformat()
+                if 'admin_gifted' not in user_data:
+                    user_data['admin_gifted'] = 0
+                
+                # Исправляем кодировку в названиях предметов если нужно
+                if 'inventory' in user_data:
+                    for item in user_data['inventory']:
+                        if 'name' in item and 'ðŸ””' in item['name']:
+                            item['name'] = '🔔 Сигна от Kme_Dota'
+            
+            print(f"✅ Успешно загружено {len(data)} пользователей")
+            return data
+            
+        except json.JSONDecodeError as e:
+            print(f"❌ Ошибка JSON: {e}")
+            return {}
+        except Exception as e:
+            print(f"❌ Ошибка загрузки: {e}")
             return {}
     
     def save_data(self):
-        # СОХРАНЯЕМ ТОЛЬКО ЕСЛИ ФАЙЛ УЖЕ ЕСТЬ
-        if os.path.exists(self.filename):
-            try:
-                with open(self.filename, 'w', encoding='utf-8') as f:
-                    json.dump(self.data, f, ensure_ascii=False, indent=2)
-                print(f"💾 База сохранена")
-            except:
-                print(f"❌ Ошибка сохранения")
-        else:
-            print(f"❌ Файла {self.filename} нет - НЕ сохраняем!")
+        try:
+            with open(self.filename, 'w', encoding='utf-8') as f:
+                json.dump(self.data, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            print(f"❌ Ошибка сохранения: {e}")
     
     def get_user(self, user_id):
         user_id = str(user_id)
-        
-        # Если базы вообще нет - возвращаем заглушку
-        if not self.db_exists:
-            return {'coins': 0, 'inventory': []}
-        
-        # Если пользователя нет в базе - НЕ создаем нового
         if user_id not in self.data:
-            print(f"❌ Пользователь {user_id} не найден в базе")
-            return {'coins': 0, 'inventory': []}
-        
+            self.data[user_id] = {
+                'coins': 0,
+                'last_farm': None,
+                'username': '',
+                'display_name': '',
+                'inventory': [],
+                'total_farmed': 0,
+                'farm_count': 0,
+                'admin_gifted': 0,
+                'last_active': datetime.now().isoformat()
+            }
+            self.save_data()
         return self.data[user_id]
     
     def update_user(self, user_id, username="", display_name=""):
-        user_id = str(user_id)
-        if not self.db_exists or user_id not in self.data:
-            return
+        user = self.get_user(user_id)
         if username:
-            self.data[user_id]['username'] = username
+            user['username'] = username
         if display_name:
-            self.data[user_id]['display_name'] = display_name
-        self.data[user_id]['last_active'] = datetime.now().isoformat()
+            user['display_name'] = display_name
+        user['last_active'] = datetime.now().isoformat()
         self.save_data()
     
     def can_farm(self, user_id):
-        user_id = str(user_id)
-        if not self.db_exists or user_id not in self.data:
-            return False, "❌ База данных не загружена или вас нет в базе"
+        user = self.get_user(user_id)
+        user['last_active'] = datetime.now().isoformat()
         
-        user = self.data[user_id]
-        
-        if not user.get('last_farm'):
+        if not user['last_farm']:
             return True, "✅ Можно фармить!"
         
         last = datetime.fromisoformat(user['last_farm'])
@@ -108,41 +134,94 @@ class Database:
             return False, f"⏳ Ждите {hours:02d}:{minutes:02d}"
     
     def add_coins(self, user_id, amount, from_farm=True, from_admin=False):
-        user_id = str(user_id)
-        if not self.db_exists or user_id not in self.data:
-            return 0
-        
-        user = self.data[user_id]
-        user['coins'] = user.get('coins', 0) + amount
+        user = self.get_user(user_id)
+        user['coins'] += amount
         if from_farm:
-            user['total_farmed'] = user.get('total_farmed', 0) + amount
-            user['farm_count'] = user.get('farm_count', 0) + 1
+            user['total_farmed'] += amount
+            user['farm_count'] += 1
             user['last_farm'] = datetime.now().isoformat()
         if from_admin:
-            user['admin_gifted'] = user.get('admin_gifted', 0) + amount
+            user['admin_gifted'] += amount
         user['last_active'] = datetime.now().isoformat()
         self.save_data()
         return user['coins']
     
-    # Остальные методы аналогично...
-    # (добавь остальные методы из прошлого кода)
-
-# СОЗДАЕМ БАЗУ
-print("=" * 50)
-print("🤖 KMEbot запускается...")
+    def buy_item(self, user_id, item_id):
+        user = self.get_user(user_id)
+        user['last_active'] = datetime.now().isoformat()
+        
+        if item_id not in SHOP_ITEMS:
+            return False, "❌ Такого товара нет!"
+        
+        item = SHOP_ITEMS[item_id]
+        if user['coins'] < item['price']:
+            return False, f"❌ Недостаточно коинов! Нужно {item['price']}, есть {user['coins']}"
+        
+        user['coins'] -= item['price']
+        user['inventory'].append({
+            'id': item_id,
+            'name': item['name'],
+            'price': item['price'],
+            'bought_at': datetime.now().isoformat(),
+            'exchanged': False
+        })
+        self.save_data()
+        return True, f"✅ Куплено: {item['name']}"
+    
+    def exchange_item(self, user_id, item_index):
+        user = self.get_user(user_id)
+        user['last_active'] = datetime.now().isoformat()
+        
+        if item_index >= len(user['inventory']):
+            return False, "❌ Такого предмета нет!"
+        
+        item = user['inventory'][item_index]
+        if item.get('exchanged', False):
+            return False, "❌ Уже обменян!"
+        
+        user['inventory'][item_index]['exchanged'] = True
+        user['inventory'][item_index]['exchanged_at'] = datetime.now().isoformat()
+        self.save_data()
+        return True, item
+    
+    def remove_item(self, user_id, item_index):
+        user = self.get_user(user_id)
+        if item_index >= len(user['inventory']):
+            return False, "❌ Такого предмета нет!"
+        
+        removed_item = user['inventory'].pop(item_index)
+        self.save_data()
+        return True, removed_item
+    
+    def add_compensation_to_all(self, amount):
+        for user_id in self.data:
+            user = self.get_user(user_id)
+            user['coins'] += amount
+            user['last_active'] = datetime.now().isoformat()
+        self.save_data()
+        return len(self.data)
+    
+    def get_user_level(self, total_coins):
+        for level in LEVELS:
+            if level["min_coins"] <= total_coins <= level["max_coins"]:
+                return level
+        return LEVELS[-1]
+    
+    def search_users(self, search_term):
+        results = []
+        search_term = search_term.lower()
+        
+        for user_id, user_data in self.data.items():
+            username = user_data.get('username', '').lower()
+            display_name = user_data.get('display_name', '').lower()
+            
+            if search_term in username or search_term in display_name:
+                results.append((user_id, user_data))
+        
+        return results
 
 db = Database()
 
-if db.db_exists:
-    print(f"✅ База загружена: {len(db.data)} игроков")
-else:
-    print(f"❌ ФАЙЛ kme_data.json НЕ НАЙДЕН!")
-    print(f"📁 Загрузите его через файловый менеджер")
-    print(f"⚠️ Бот будет работать, но новые игроки НЕ БУДУТ добавляться!")
-
-print("=" * 50)
-
-# ========== ФУНКЦИИ БОТА ==========
 async def send_exchange_notification(context, user_id, item):
     user_data = db.get_user(user_id)
     
@@ -165,20 +244,19 @@ async def send_exchange_notification(context, user_id, item):
         print(f"❌ Ошибка уведомления: {e}")
 
 async def send_party_announcement(context, user_id, mmr):
-    try:
-        user = await context.bot.get_chat(user_id)
-    except:
-        user = None
-    
+    user = await context.bot.get_chat(user_id)
     user_data = db.get_user(user_id)
     level = db.get_user_level(user_data['total_farmed'])
     
     message = (
         f"🔍 <b>НОВЫЙ ИГРОК ИЩЕТ ТИМУ!</b>\n\n"
-        f"👤 <b>Игрок:</b> {user.first_name if user else 'Неизвестно'}\n"
+        f"👤 <b>Игрок:</b> {user.first_name}\n"
     )
     
-    if user and user.username:
+    if user.last_name:
+        message += f"👤 <b>Фамилия:</b> {user.last_name}\n"
+    
+    if user.username:
         message += f"📱 <b>Telegram:</b> @{user.username}\n"
     
     message += (
@@ -186,13 +264,19 @@ async def send_party_announcement(context, user_id, mmr):
         f"🆔 <b>ID:</b> <code>{user_id}</code>\n\n"
     )
     
-    if user_data.get('display_name'):
+    if user_data['display_name']:
         message += f"📝 <b>Имя в боте:</b> {user_data['display_name']}\n"
     
     message += (
         f"💰 <b>Баланс:</b> {user_data['coins']} коинов\n"
         f"🏆 <b>Уровень:</b> {level['name']}\n\n"
+        f"💬 <b>Как связаться:</b>\n"
     )
+    
+    if user.username:
+        message += f"📨 Telegram: @{user.username}\n"
+    
+    message += f"🤖 Бот: /write {user_id}"
     
     try:
         await context.bot.send_message(
@@ -220,6 +304,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/shop - Магазин (только в ЛС)\n"
         "/inventory - Инвентарь\n"
         "/party [MMR] - Найти тиму\n"
+        "/top - Топ игроков\n"
         "/profile - Профиль\n"
         "/users - Поиск игроков\n"
         "/help - Помощь"
@@ -236,7 +321,10 @@ async def farm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     can_farm, msg = db.can_farm(user.id)
     
     if not can_farm:
-        await update.message.reply_text(f"❌ {msg}")
+        try:
+            await update.message.reply_text(f"❌ {msg}")
+        except:
+            pass
         return
     
     coins = random.randint(1, 2)
@@ -257,7 +345,10 @@ async def farm(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"⏰ <b>Следующий:</b> через {FARM_COOLDOWN}ч"
     )
     
-    await update.message.reply_text(message, parse_mode='HTML')
+    try:
+        await update.message.reply_text(message, parse_mode='HTML')
+    except:
+        pass
 
 async def balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -274,7 +365,10 @@ async def balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"🎁 <b>Подарков:</b> {user_data['admin_gifted']}"
     )
     
-    await update.message.reply_text(message, parse_mode='HTML')
+    try:
+        await update.message.reply_text(message, parse_mode='HTML')
+    except:
+        pass
 
 async def level(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -299,22 +393,30 @@ async def level(update: Update, context: ContextTypes.DEFAULT_TYPE):
         need = next_level['min_coins'] - user_data['total_farmed']
         message += f"📈 <b>До след.:</b> {need} коинов"
     
-    await update.message.reply_text(message, parse_mode='HTML')
+    try:
+        await update.message.reply_text(message, parse_mode='HTML')
+    except:
+        pass
 
 async def shop(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.chat.type != "private":
-        await update.message.reply_text(
-            "🛍️ <b>Магазин доступен только в личных сообщениях с ботом!</b>\n\n"
-            "👉 Напишите мне в ЛС",
-            parse_mode='HTML'
-        )
+        try:
+            await update.message.reply_text(
+                "🛍️ <b>Магазин доступен только в личных сообщениях с ботом!</b>\n\n"
+                "👉 Напишите мне в ЛС",
+                parse_mode='HTML'
+            )
+        except:
+            pass
         return
     
     user = update.effective_user
     db.update_user(user.id)
     user_data = db.get_user(user.id)
     
-    message = f"🏪 <b>МАГАЗИН ПРЕДМЕТОВ</b>\n\n"
+    message = (
+        f"🏪 <b>МАГАЗИН ПРЕДМЕТОВ</b>\n\n"
+    )
     
     for item_id, item in SHOP_ITEMS.items():
         message += (
@@ -326,7 +428,10 @@ async def shop(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     message += f"💵 <b>Ваш баланс:</b> {user_data['coins']} коинов"
     
-    await update.message.reply_text(message, parse_mode='HTML')
+    try:
+        await update.message.reply_text(message, parse_mode='HTML')
+    except:
+        pass
 
 async def buy_item(update: Update, context: ContextTypes.DEFAULT_TYPE, item_id: int):
     user = update.effective_user
@@ -342,9 +447,15 @@ async def buy_item(update: Update, context: ContextTypes.DEFAULT_TYPE, item_id: 
             f"📦 Предмет в инвентаре\n"
             f"🔧 /inventory для обмена"
         )
-        await update.message.reply_text(message, parse_mode='HTML')
+        try:
+            await update.message.reply_text(message, parse_mode='HTML')
+        except:
+            pass
     else:
-        await update.message.reply_text(f"❌ {result}")
+        try:
+            await update.message.reply_text(f"❌ {result}")
+        except:
+            pass
 
 async def inventory(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -352,10 +463,14 @@ async def inventory(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_data = db.get_user(user.id)
     
     if not user_data['inventory']:
-        await update.message.reply_text(
-            f"📦 <b>ИНВЕНТАРЬ ПУСТ</b>\n\n🛍️ /shop",
-            parse_mode='HTML'
+        message = (
+            f"📦 <b>ИНВЕНТАРЬ ПУСТ</b>\n\n"
+            f"🛍️ /shop"
         )
+        try:
+            await update.message.reply_text(message, parse_mode='HTML')
+        except:
+            pass
         return
     
     keyboard = []
@@ -379,56 +494,113 @@ async def inventory(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"💡 Нажмите на предмет для обмена"
     )
     
-    await update.message.reply_text(
-        message,
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode='HTML'
-    )
+    try:
+        await update.message.reply_text(
+            message,
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode='HTML'
+        )
+    except:
+        pass
+
+async def top(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not db.data:
+        try:
+            await update.message.reply_text("📭 Нет игроков")
+        except:
+            pass
+        return
+    
+    top_users = sorted(db.data.items(), key=lambda x: x[1]['total_farmed'], reverse=True)[:10]
+    
+    message = f"👑 <b>ТОП-10 ИГРОКОВ</b>\n\n"
+    
+    medals = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"]
+    
+    for i, (user_id, user_data) in enumerate(top_users):
+        if i < len(medals):
+            medal = medals[i]
+        else:
+            medal = f"{i+1}."
+        
+        if user_data.get('username'):
+            name = f"@{user_data['username']}"
+        elif user_data.get('display_name'):
+            name = user_data['display_name'][:15]
+            if len(user_data['display_name']) > 15:
+                name += "..."
+        else:
+            name = f"ID:{user_id[:6]}"
+        
+        level = db.get_user_level(user_data['total_farmed'])
+        
+        message += (
+            f"{medal} <b>{name}</b>\n"
+            f"💰 {user_data['total_farmed']} коинов | {level['name']}\n"
+        )
+    
+    try:
+        await update.message.reply_text(message, parse_mode='HTML')
+    except:
+        pass
 
 async def party(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     db.update_user(user.id)
     
     if not context.args:
-        await update.message.reply_text(
+        message = (
             f"🎯 <b>ПОИСК ТИМЫ ДЛЯ DOTA 2</b>\n\n"
             f"📝 <b>Использование:</b>\n"
             f"<code>/party [ваш MMR]</code>\n\n"
             f"📋 <b>Пример:</b>\n"
-            f"<code>/party 4500</code>",
-            parse_mode='HTML'
+            f"<code>/party 4500</code>"
         )
+        try:
+            await update.message.reply_text(message, parse_mode='HTML')
+        except:
+            pass
         return
     
     try:
         mmr = int(context.args[0])
         await send_party_announcement(context, user.id, mmr)
         
-        await update.message.reply_text(
+        message = (
             f"✅ <b>ЗАЯВКА ПРИНЯТА!</b>\n\n"
             f"👤 <b>Игрок:</b> {user.first_name}\n"
             f"📊 <b>MMR:</b> {mmr}\n\n"
             f"📨 Админ получил вашу заявку\n"
-            f"👥 Скоро поможем найти тиму!",
-            parse_mode='HTML'
+            f"👥 Скоро поможем найти тиму!"
         )
         
+        try:
+            await update.message.reply_text(message, parse_mode='HTML')
+        except:
+            pass
+        
     except ValueError:
-        await update.message.reply_text("❌ Укажите число MMR")
+        try:
+            await update.message.reply_text("❌ Укажите число MMR")
+        except:
+            pass
 
 async def write(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     db.update_user(user.id)
     
     if len(context.args) < 2:
-        await update.message.reply_text(
+        message = (
             f"📨 <b>НАПИСАТЬ ИГРОКУ</b>\n\n"
             f"📝 <b>Использование:</b>\n"
             f"<code>/write [ID_игрока] [сообщение]</code>\n\n"
             f"📋 <b>Пример:</b>\n"
-            f"<code>/write 6443845944 Привет!</code>",
-            parse_mode='HTML'
+            f"<code>/write 6443845944 Привет!</code>"
         )
+        try:
+            await update.message.reply_text(message, parse_mode='HTML')
+        except:
+            pass
         return
     
     try:
@@ -453,18 +625,29 @@ async def write(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 parse_mode='HTML'
             )
             
-            await update.message.reply_text(
+            confirmation = (
                 f"✅ <b>СООБЩЕНИЕ ОТПРАВЛЕНО!</b>\n\n"
                 f"👤 <b>Игроку с ID:</b> {target_id}\n"
-                f"💬 <b>Ваше сообщение:</b>\n<code>{message_text}</code>",
-                parse_mode='HTML'
+                f"💬 <b>Ваше сообщение:</b>\n<code>{message_text}</code>"
             )
             
+            try:
+                await update.message.reply_text(confirmation, parse_mode='HTML')
+            except:
+                pass
+            
         except Exception as e:
-            await update.message.reply_text("❌ Не удалось отправить сообщение. Игрок может заблокировать бота.")
+            error_msg = "❌ Не удалось отправить сообщение. Игрок может заблокировать бота."
+            try:
+                await update.message.reply_text(error_msg)
+            except:
+                pass
             
     except ValueError:
-        await update.message.reply_text("❌ ID должен быть числом")
+        try:
+            await update.message.reply_text("❌ ID должен быть числом")
+        except:
+            pass
 
 async def profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -483,7 +666,7 @@ async def profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user.username:
         message += f"📱 <b>Telegram:</b> @{user.username}\n"
     
-    if user_data.get('display_name'):
+    if user_data['display_name']:
         message += f"📝 <b>Имя в боте:</b> {user_data['display_name']}\n"
     
     message += (
@@ -496,7 +679,10 @@ async def profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"📦 <b>Предметов:</b> {len(user_data['inventory'])}"
     )
     
-    await update.message.reply_text(message, parse_mode='HTML')
+    try:
+        await update.message.reply_text(message, parse_mode='HTML')
+    except:
+        pass
 
 async def users(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -511,29 +697,39 @@ async def users(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if (datetime.now() - last_active).days == 0:
                 active_today += 1
         
-        await update.message.reply_text(
+        message = (
             f"📊 <b>СТАТИСТИКА ПОЛЬЗОВАТЕЛЕЙ</b>\n\n"
             f"👥 <b>Всего игроков:</b> {total_users}\n"
             f"🟢 <b>Активных сегодня:</b> {active_today}\n\n"
             f"🔍 <b>Поиск игроков:</b>\n"
             f"<code>/users [имя или username]</code>\n\n"
             f"📋 <b>Пример:</b>\n"
-            f"<code>/users matvei</code>",
-            parse_mode='HTML'
+            f"<code>/users matvei</code>"
         )
+        
+        try:
+            await update.message.reply_text(message, parse_mode='HTML')
+        except:
+            pass
         return
     
     search_term = " ".join(context.args)
     results = db.search_users(search_term)
     
     if not results:
-        await update.message.reply_text(
-            f"🔍 <b>НИЧЕГО НЕ НАЙДЕНО</b>\n\n🔍 <b>Поиск:</b> {search_term}",
-            parse_mode='HTML'
+        message = (
+            f"🔍 <b>НИЧЕГО НЕ НАЙДЕНО</b>\n\n"
+            f"🔍 <b>Поиск:</b> {search_term}"
         )
+        try:
+            await update.message.reply_text(message, parse_mode='HTML')
+        except:
+            pass
         return
     
-    message = f"✅ <b>НАЙДЕНО {len(results)} ИГРОКОВ</b>\n\n"
+    message = (
+        f"✅ <b>НАЙДЕНО {len(results)} ИГРОКОВ</b>\n\n"
+    )
     
     for i, (user_id, user_data) in enumerate(results[:10], 1):
         if user_data.get('username'):
@@ -556,26 +752,35 @@ async def users(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(results) > 10:
         message += f"\n📄 ... и еще {len(results) - 10} игроков"
     
-    await update.message.reply_text(message, parse_mode='HTML')
+    try:
+        await update.message.reply_text(message, parse_mode='HTML')
+    except:
+        pass
 
 def is_admin(user_id):
     return user_id == ADMIN_ID
 
 async def give(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
-        await update.message.reply_text("❌ Только для админа!")
+        try:
+            await update.message.reply_text("❌ Только для админа!")
+        except:
+            pass
         return
     
     if not update.message.reply_to_message or not context.args:
-        await update.message.reply_text(
+        message = (
             f"💰 <b>ВЫДАЧА КОИНОВ</b>\n\n"
             f"📝 <b>Использование:</b>\n"
             f"1. Ответьте на сообщение игрока\n"
             f"2. Напишите: <code>/give [сумма]</code>\n\n"
             f"📋 <b>Пример:</b>\n"
-            f"<code>/give 100</code>",
-            parse_mode='HTML'
+            f"<code>/give 100</code>"
         )
+        try:
+            await update.message.reply_text(message, parse_mode='HTML')
+        except:
+            pass
         return
     
     try:
@@ -583,43 +788,69 @@ async def give(update: Update, context: ContextTypes.DEFAULT_TYPE):
         target_user = update.message.reply_to_message.from_user
         new_balance = db.add_coins(target_user.id, amount, from_farm=False, from_admin=True)
         
-        await update.message.reply_text(
+        message = (
             f"✅ <b>КОИНЫ ВЫДАНЫ!</b>\n\n"
             f"👤 <b>Игроку:</b> {target_user.first_name}\n"
             f"💰 <b>Сумма:</b> {amount} коинов\n"
-            f"💳 <b>Новый баланс:</b> {new_balance} коинов",
-            parse_mode='HTML'
+            f"💳 <b>Новый баланс:</b> {new_balance} коинов"
         )
         
+        try:
+            await update.message.reply_text(message, parse_mode='HTML')
+        except:
+            pass
+        
     except:
-        await update.message.reply_text("❌ Ошибка! Укажите число")
+        try:
+            await update.message.reply_text("❌ Ошибка! Укажите число")
+        except:
+            pass
 
 async def announce(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
-        await update.message.reply_text("❌ Только для админа!")
+        try:
+            await update.message.reply_text("❌ Только для админа!")
+        except:
+            pass
         return
     
     if not context.args:
-        await update.message.reply_text("❌ Формат: /announce [текст]")
+        try:
+            await update.message.reply_text("❌ Формат: /announce [текст]")
+        except:
+            pass
         return
     
     text = " ".join(context.args)
-    await update.message.reply_text(
-        f"📣 <b>ОБЪЯВЛЕНИЕ ОТ АДМИНА</b>\n\n{text}",
-        parse_mode='HTML'
+    message = (
+        f"📣 <b>ОБЪЯВЛЕНИЕ ОТ АДМИНА</b>\n\n"
+        f"{text}"
     )
+    try:
+        await update.message.reply_text(message, parse_mode='HTML')
+    except:
+        pass
 
 async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
-        await update.message.reply_text("❌ Только для админа!")
+        try:
+            await update.message.reply_text("❌ Только для админа!")
+        except:
+            pass
         return
     
     if not context.args:
-        await update.message.reply_text("❌ Формат: /broadcast [текст]")
+        try:
+            await update.message.reply_text("❌ Формат: /broadcast [текст]")
+        except:
+            pass
         return
     
     text = " ".join(context.args)
-    message = f"📨 <b>СООБЩЕНИЕ ОТ АДМИНА</b>\n\n{text}"
+    message = (
+        f"📨 <b>СООБЩЕНИЕ ОТ АДМИНА</b>\n\n"
+        f"{text}"
+    )
     
     sent = 0
     failed = 0
@@ -635,42 +866,59 @@ async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except:
             failed += 1
     
-    await update.message.reply_text(
+    result = (
         f"📨 <b>РАССЫЛКА ЗАВЕРШЕНА</b>\n\n"
         f"✅ <b>Отправлено:</b> {sent} игрокам\n"
-        f"❌ <b>Не отправлено:</b> {failed} игрокам",
-        parse_mode='HTML'
+        f"❌ <b>Не отправлено:</b> {failed} игрокам"
     )
+    
+    try:
+        await update.message.reply_text(result, parse_mode='HTML')
+    except:
+        pass
 
 async def compensation(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
-        await update.message.reply_text("❌ Только для админа!")
+        try:
+            await update.message.reply_text("❌ Только для админа!")
+        except:
+            pass
         return
     
     total = db.add_compensation_to_all(COMPENSATION_AMOUNT)
     
-    await update.message.reply_text(
+    message = (
         f"💰 <b>КОМПЕНСАЦИЯ ВЫДАНА!</b>\n\n"
         f"👥 <b>Игроков:</b> {total}\n"
         f"🎁 <b>Каждому:</b> {COMPENSATION_AMOUNT} коинов\n"
-        f"💰 <b>Всего:</b> {total * COMPENSATION_AMOUNT} коинов",
-        parse_mode='HTML'
+        f"💰 <b>Всего:</b> {total * COMPENSATION_AMOUNT} коинов"
     )
+    
+    try:
+        await update.message.reply_text(message, parse_mode='HTML')
+    except:
+        pass
 
 async def removeitem(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
-        await update.message.reply_text("❌ Только для админа!")
+        try:
+            await update.message.reply_text("❌ Только для админа!")
+        except:
+            pass
         return
     
     if len(context.args) != 2:
-        await update.message.reply_text(
+        message = (
             f"🗑️ <b>УДАЛЕНИЕ ПРЕДМЕТА</b>\n\n"
             f"📝 <b>Использование:</b>\n"
             f"<code>/removeitem [ID_игрока] [номер_предмета]</code>\n\n"
             f"📋 <b>Пример:</b>\n"
-            f"<code>/removeitem 6443845944 0</code>",
-            parse_mode='HTML'
+            f"<code>/removeitem 6443845944 0</code>"
         )
+        try:
+            await update.message.reply_text(message, parse_mode='HTML')
+        except:
+            pass
         return
     
     try:
@@ -683,22 +931,35 @@ async def removeitem(update: Update, context: ContextTypes.DEFAULT_TYPE):
             user_data = db.get_user(user_id)
             user_name = f"@{user_data.get('username', '')}" if user_data.get('username') else f"ID:{user_id}"
             
-            await update.message.reply_text(
+            message = (
                 f"✅ <b>ПРЕДМЕТ УДАЛЕН!</b>\n\n"
                 f"🎁 <b>Предмет:</b> {item['name']}\n"
                 f"👤 <b>От игрока:</b> {user_name}\n"
-                f"💰 <b>Стоимость:</b> {item['price']} коинов",
-                parse_mode='HTML'
+                f"💰 <b>Стоимость:</b> {item['price']} коинов"
             )
+            
+            try:
+                await update.message.reply_text(message, parse_mode='HTML')
+            except:
+                pass
         else:
-            await update.message.reply_text("❌ Не удалось удалить предмет")
+            try:
+                await update.message.reply_text("❌ Не удалось удалить предмет")
+            except:
+                pass
             
     except (ValueError, IndexError):
-        await update.message.reply_text("❌ Ошибка! Проверьте ID и номер предмета")
+        try:
+            await update.message.reply_text("❌ Ошибка! Проверьте ID и номер предмета")
+        except:
+            pass
 
 async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
-        await update.message.reply_text("❌ Только для админа!")
+        try:
+            await update.message.reply_text("❌ Только для админа!")
+        except:
+            pass
         return
     
     total_players = len(db.data)
@@ -717,14 +978,51 @@ async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("📊 Статистика", callback_data="stats")],
         [InlineKeyboardButton("💰 Компенсация", callback_data="comp")],
         [InlineKeyboardButton("📢 Рассылка", callback_data="broadcast")],
+        [InlineKeyboardButton("📋 Список бэкапов", callback_data="show_backups")],
         [InlineKeyboardButton("❌ Закрыть", callback_data="close")]
     ]
     
-    await update.message.reply_text(
-        message,
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode='HTML'
-    )
+    try:
+        await update.message.reply_text(
+            message,
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode='HTML'
+        )
+    except:
+        pass
+
+async def backup_db(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        try:
+            await update.message.reply_text("❌ Только для админа!")
+        except:
+            pass
+        return
+    
+    try:
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        backup_file = f"kme_data.json.backup_{timestamp}"
+        
+        with open('kme_data.json', 'r', encoding='utf-8') as src:
+            with open(backup_file, 'w', encoding='utf-8') as dst:
+                dst.write(src.read())
+        
+        message = (
+            f"✅ <b>РЕЗЕРВНАЯ КОПИЯ СОЗДАНА!</b>\n\n"
+            f"📁 <b>Файл:</b> {backup_file}\n"
+            f"👥 <b>Пользователей:</b> {len(db.data)}"
+        )
+        
+        await update.message.reply_text(message, parse_mode='HTML')
+        
+        with open(backup_file, 'rb') as f:
+            await update.message.reply_document(
+                document=f,
+                filename=backup_file
+            )
+        
+    except Exception as e:
+        await update.message.reply_text(f"❌ Ошибка создания бэкапа: {e}")
 
 async def restore_db(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
@@ -732,53 +1030,229 @@ async def restore_db(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     if not update.message.document:
-        await update.message.reply_text(
+        message = (
             f"🔄 <b>ВОССТАНОВЛЕНИЕ БАЗЫ</b>\n\n"
             f"📝 <b>Инструкция:</b>\n"
-            f"1. Отправьте файл старой базы (kme_data.json)\n"
+            f"1. Отправьте файл kme_data.json\n"
             f"2. Напишите команду: /restore_db\n\n"
-            f"⚠️ <b>ТЕКУЩАЯ БАЗА БУДЕТ ПОЛНОСТЬЮ ЗАМЕНЕНА!</b>\n"
-            f"💾 Но сначала будет создана её копия",
-            parse_mode='HTML'
+            f"⚠️ Старая база будет сохранена"
         )
+        await update.message.reply_text(message, parse_mode='HTML')
         return
     
     try:
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        backup_current = f"{DB_FILENAME}.backup_{timestamp}"
-        
-        if os.path.exists(DB_FILENAME):
-            with open(DB_FILENAME, 'r', encoding='utf-8') as src:
-                with open(backup_current, 'w', encoding='utf-8') as dst:
-                    dst.write(src.read())
-        
         file = await update.message.document.get_file()
-        await file.download_to_drive(DB_FILENAME)
+        
+        if os.path.exists('kme_data.json'):
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            old_backup = f"kme_data.json.old_{timestamp}"
+            os.rename('kme_data.json', old_backup)
+        
+        await file.download_to_drive('kme_data.json')
         
         global db
-        db = Database(DB_FILENAME)
+        db = Database()
         
-        await update.message.reply_text(
-            f"✅ <b>БАЗА УСПЕШНО ЗАМЕНЕНА!</b>\n\n"
-            f"📊 <b>Новая база:</b> {len(db.data)} игроков\n"
-            f"💾 <b>Сохранена копия старой:</b> {backup_current}",
-            parse_mode='HTML'
+        message = (
+            f"✅ <b>БАЗА ВОССТАНОВЛЕНА!</b>\n\n"
+            f"👥 <b>Пользователей:</b> {len(db.data)}\n"
+            f"💾 <b>Старая база:</b> {old_backup}"
         )
+        
+        await update.message.reply_text(message, parse_mode='HTML')
         
     except Exception as e:
         await update.message.reply_text(f"❌ Ошибка восстановления: {e}")
+
+async def db_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        await update.message.reply_text("❌ Только для админа!")
+        return
+    
+    db_files = glob.glob("kme_data.json*")
+    
+    message = (
+        f"🗃️ <b>ИНФОРМАЦИЯ О БАЗЕ</b>\n\n"
+    )
+    
+    for db_file in sorted(db_files):
+        if os.path.exists(db_file):
+            size = os.path.getsize(db_file)
+            modified = datetime.fromtimestamp(os.path.getmtime(db_file)).strftime('%d.%m.%Y %H:%M')
+            
+            if db_file == "kme_data.json":
+                message += f"📁 <b>Основная база:</b> {db_file}\n"
+                message += f"📏 Размер: {size} байт\n"
+                message += f"⏰ Изменена: {modified}\n"
+                message += f"👥 Пользователей: {len(db.data)}\n\n"
+            else:
+                message += f"📁 Резервная: {db_file}\n"
+                message += f"📏 Размер: {size} байт\n"
+                message += f"⏰ Изменена: {modified}\n\n"
+    
+    message += (
+        f"💡 <b>Команды:</b>\n"
+        f"• /backup_db - Создать копию\n"
+        f"• /listbackups - Показать все бэкапы\n"
+        f"• /restore_db - Восстановить из файла\n"
+        f"• /db_info - Эта информация"
+    )
+    
+    await update.message.reply_text(message, parse_mode='HTML')
+
+async def listbackups(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показывает список бэкапов и позволяет выбрать для восстановления"""
+    if not is_admin(update.effective_user.id):
+        await update.message.reply_text("❌ Только для админа!")
+        return
+
+    backup_files = glob.glob("kme_data.json.backup_*")
+    old_files = glob.glob("kme_data.json.old_*")
+    all_backups = sorted(backup_files + old_files, reverse=True)
+
+    if not all_backups:
+        keyboard = [[InlineKeyboardButton("📁 Создать бэкап сейчас", callback_data="create_backup")]]
+        await update.message.reply_text(
+            "📭 **Бэкапы не найдены**\n\nСначала создайте резервную копию командой /backup_db",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode='Markdown'
+        )
+        return
+
+    keyboard = []
+    for i, backup_file in enumerate(all_backups[:10]):
+        size = os.path.getsize(backup_file)
+        modified = datetime.fromtimestamp(os.path.getmtime(backup_file)).strftime('%d.%m.%Y %H:%M')
+        
+        btn_text = f"{i+1}. {modified} ({size} байт)"
+        callback_data = f"restore_{backup_file}"
+        keyboard.append([InlineKeyboardButton(btn_text, callback_data=callback_data)])
+
+    keyboard.append([InlineKeyboardButton("❌ Отмена", callback_data="close")])
+
+    await update.message.reply_text(
+        "🔄 **Выберите бэкап для восстановления:**\n\n"
+        "⚠️ Текущая база будет сохранена как `kme_data.json.old_ТЕКУЩЕЕ_ВРЕМЯ`",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode='Markdown'
+    )
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     
     if query.data == "close":
-        await query.delete_message()
+        try:
+            await query.delete_message()
+        except:
+            pass
+        return
+    
+    if query.data == "create_backup":
+        try:
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            backup_file = f"kme_data.json.backup_{timestamp}"
+            
+            with open('kme_data.json', 'r', encoding='utf-8') as src:
+                with open(backup_file, 'w', encoding='utf-8') as dst:
+                    dst.write(src.read())
+            
+            await query.edit_message_text(f"✅ Бэкап создан: {backup_file}")
+        except Exception as e:
+            await query.edit_message_text(f"❌ Ошибка: {e}")
+        return
+    
+    if query.data.startswith("restore_"):
+        backup_file = query.data[8:]
+        
+        if not os.path.exists(backup_file):
+            await query.edit_message_text("❌ Файл бэкапа не найден!")
+            return
+        
+        try:
+            if os.path.exists('kme_data.json'):
+                timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+                old_backup = f"kme_data.json.old_{timestamp}"
+                os.rename('kme_data.json', old_backup)
+            
+            with open(backup_file, 'r', encoding='utf-8') as src:
+                with open('kme_data.json', 'w', encoding='utf-8') as dst:
+                    dst.write(src.read())
+            
+            global db
+            db = Database()
+            
+            await query.edit_message_text(
+                f"✅ **База восстановлена!**\n\n"
+                f"📁 Из файла: `{backup_file}`\n"
+                f"👥 Загружено игроков: {len(db.data)}\n"
+                f"💾 Старая база: `{old_backup}`",
+                parse_mode='Markdown'
+            )
+            
+        except Exception as e:
+            await query.edit_message_text(f"❌ Ошибка восстановления: {e}")
+        return
+    
+    if query.data == "show_backups":
+        backup_files = glob.glob("kme_data.json.backup_*")
+        old_files = glob.glob("kme_data.json.old_*")
+        all_backups = sorted(backup_files + old_files, reverse=True)
+        
+        if not all_backups:
+            await query.edit_message_text("📭 Бэкапы не найдены")
+            return
+        
+        keyboard = []
+        for i, backup_file in enumerate(all_backups[:10]):
+            size = os.path.getsize(backup_file)
+            modified = datetime.fromtimestamp(os.path.getmtime(backup_file)).strftime('%d.%m.%Y %H:%M')
+            btn_text = f"{i+1}. {modified}"
+            callback_data = f"restore_{backup_file}"
+            keyboard.append([InlineKeyboardButton(btn_text, callback_data=callback_data)])
+        
+        keyboard.append([InlineKeyboardButton("◀️ Назад", callback_data="back_to_admin")])
+        
+        await query.edit_message_text(
+            "🔄 **Выберите бэкап:**",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode='Markdown'
+        )
+        return
+    
+    if query.data == "back_to_admin":
+        total_players = len(db.data)
+        total_coins = sum(user['coins'] for user in db.data.values())
+        total_items = sum(len(user['inventory']) for user in db.data.values())
+        
+        message = (
+            f"⚙️ <b>АДМИН ПАНЕЛЬ</b>\n\n"
+            f"📊 <b>Статистика:</b>\n"
+            f"👥 Игроков: {total_players}\n"
+            f"💰 Коинов: {total_coins}\n"
+            f"📦 Предметов: {total_items}"
+        )
+        
+        keyboard = [
+            [InlineKeyboardButton("📊 Статистика", callback_data="stats")],
+            [InlineKeyboardButton("💰 Компенсация", callback_data="comp")],
+            [InlineKeyboardButton("📢 Рассылка", callback_data="broadcast")],
+            [InlineKeyboardButton("📋 Список бэкапов", callback_data="show_backups")],
+            [InlineKeyboardButton("❌ Закрыть", callback_data="close")]
+        ]
+        
+        await query.edit_message_text(
+            message,
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode='HTML'
+        )
         return
     
     if query.data.startswith("view_"):
-        await query.edit_message_text("✅ Предмет уже обменян")
-        return
+        try:
+            await query.edit_message_text("✅ Предмет уже обменян")
+        except:
+            pass
     
     elif query.data.startswith("exchange_"):
         item_index = int(query.data.split("_")[1])
@@ -787,18 +1261,25 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         success, item = db.exchange_item(user.id, item_index)
         
         if success:
-            await query.edit_message_text(
+            message = (
                 f"✅ <b>ПРЕДМЕТ ОТПРАВЛЕН НА ОБМЕН!</b>\n\n"
                 f"🎁 <b>Предмет:</b> {item['name']}\n"
                 f"💰 <b>Стоимость:</b> {item['price']} коинов\n\n"
                 f"📨 Админ получил уведомление\n"
-                f"⏳ Скоро свяжемся для выполнения",
-                parse_mode='HTML'
+                f"⏳ Скоро свяжемся для выполнения"
             )
-            await send_exchange_notification(context, user.id, item)
+            
+            try:
+                await query.edit_message_text(message, parse_mode='HTML')
+                await send_exchange_notification(context, user.id, item)
+            except:
+                pass
+            
         else:
-            await query.edit_message_text("❌ Ошибка обмена")
-        return
+            try:
+                await query.edit_message_text("❌ Ошибка обмена")
+            except:
+                pass
     
     elif query.data == "stats":
         total_players = len(db.data)
@@ -806,25 +1287,35 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         total_items = sum(len(user['inventory']) for user in db.data.values())
         total_farmed = sum(user['total_farmed'] for user in db.data.values())
         
-        await query.edit_message_text(
+        message = (
             f"📈 <b>ПОДРОБНАЯ СТАТИСТИКА</b>\n\n"
             f"👥 <b>Игроков:</b> {total_players}\n"
             f"💰 <b>Коинов:</b> {total_coins}\n"
             f"🎯 <b>Заработано:</b> {total_farmed}\n"
-            f"📦 <b>Предметов:</b> {total_items}",
-            parse_mode='HTML'
+            f"📦 <b>Предметов:</b> {total_items}"
         )
         
+        try:
+            await query.edit_message_text(message, parse_mode='HTML')
+        except:
+            pass
+        
     elif query.data == "comp":
-        await query.edit_message_text(
-            "💰 Используйте:\n<code>/compensation</code>",
-            parse_mode='HTML'
-        )
+        try:
+            await query.edit_message_text(
+                "💰 Используйте:\n<code>/compensation</code>",
+                parse_mode='HTML'
+            )
+        except:
+            pass
     elif query.data == "broadcast":
-        await query.edit_message_text(
-            "📢 Используйте:\n<code>/broadcast [текст]</code>",
-            parse_mode='HTML'
-        )
+        try:
+            await query.edit_message_text(
+                "📢 Используйте:\n<code>/broadcast [текст]</code>",
+                parse_mode='HTML'
+            )
+        except:
+            pass
 
 def main():
     print("=" * 50)
@@ -833,7 +1324,6 @@ def main():
     print(f"🎮 Уровней: {len(LEVELS)}")
     print(f"💰 Фарм: 1-2 коинов, {FARM_COOLDOWN}ч КД")
     print(f"👑 Админ ID: {ADMIN_ID}")
-    print(f"📁 Файл базы: {DB_FILENAME}")
     print("=" * 50)
     
     application = Application.builder().token(TOKEN).build()
@@ -845,6 +1335,7 @@ def main():
         ("level", level),
         ("shop", shop),
         ("inventory", inventory),
+        ("top", top),
         ("party", party),
         ("write", write),
         ("profile", profile),
@@ -855,8 +1346,11 @@ def main():
         ("compensation", compensation),
         ("removeitem", removeitem),
         ("admin", admin),
-        ("give", give),
+        ("backup_db", backup_db),
         ("restore_db", restore_db),
+        ("db_info", db_info),
+        ("listbackups", listbackups),
+        ("give", give),
     ]
     
     for cmd, handler in commands:
@@ -873,8 +1367,8 @@ def main():
     application.add_handler(CallbackQueryHandler(button_handler))
     
     print("✅ Бот запущен!")
-    print(f"📁 Файл базы: {DB_FILENAME}")
-    print("🔄 Для восстановления БД: отправьте файл и /restore_db")
+    print("📁 Используется файл: kme_data.json")
+    print("💾 Команда для просмотра бэкапов: /listbackups")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
