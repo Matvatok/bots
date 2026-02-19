@@ -1,7 +1,6 @@
 import json
 import os
 import random
-import time
 from datetime import datetime, timedelta
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, ContextTypes, CallbackQueryHandler
@@ -11,6 +10,9 @@ TOKEN = "8130787520:AAHulnzqWno0OlDqvlpdt6fjLqno8VFnBoc"
 ADMIN_ID = 8537120818
 FARM_COOLDOWN = 4
 COMPENSATION_AMOUNT = 15
+
+# ⚡️ ВАЖНО! Используем ТВОЙ файл с 76 игроками
+DB_FILENAME = "my_precious_data.json"
 
 LEVELS = [
     {"level": 1, "name": "👶 Рекрут", "min_coins": 0, "max_coins": 100},
@@ -30,18 +32,16 @@ SHOP_ITEMS = {
 }
 
 class Database:
-    def __init__(self, filename="kme_data.json"):
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-        self.filename = os.path.join(current_dir, filename)
-        
-        print(f"📁 База данных: {self.filename}")
-        
+    def __init__(self, filename):
+        self.filename = filename
+        print(f"📁 Загружаем базу: {self.filename}")
         self.data = self.load_data()
         print(f"👥 Загружено игроков: {len(self.data)}")
     
     def load_data(self):
         if not os.path.exists(self.filename):
-            print("📝 Файл базы не найден, создаем новый")
+            print(f"❌ ФАЙЛ {self.filename} НЕ НАЙДЕН!")
+            print("📁 Переименуй свой файл в my_precious_data.json через файловый менеджер")
             return {}
         
         try:
@@ -216,20 +216,24 @@ class Database:
         
         return results
 
-# ИСПОЛЬЗУЕМ ДРУГОЕ ИМЯ ФАЙЛА, КОТОРЫЙ BOTHOST НЕ ТРОГАЕТ!
-DB_FILENAME = "my_precious_data.json"  # BotHost не знает про этот файл!
+# ========== СОЗДАЕМ БАЗУ ==========
+print("=" * 50)
+print("🤖 KMEbot запускается...")
 
-# Загружаем базу
+# Проверяем наличие ТВОЕГО файла с 76 игроками
 if os.path.exists(DB_FILENAME):
+    print(f"✅ Найден файл: {DB_FILENAME}")
     db = Database(DB_FILENAME)
-    print(f"✅ База загружена из {DB_FILENAME}: {len(db.data)} игроков")
+    print(f"👥 Всего игроков в базе: {len(db.data)}")
 else:
-    print(f"❌ Файл {DB_FILENAME} не найден!")
-    print(f"📁 Переименуй свой файл в {DB_FILENAME} через файловый менеджер")
-    # Создаем пустую базу
-    db = Database(DB_FILENAME)
-    print(f"✅ Создана новая база {DB_FILENAME}")
+    print(f"❌ ФАЙЛ {DB_FILENAME} НЕ НАЙДЕН!")
+    print("📁 В файловом менеджере BotHost переименуй свой файл в my_precious_data.json")
+    print("🚫 Бот не может работать без базы данных!")
+    exit(1)
 
+print("=" * 50)
+
+# ========== ФУНКЦИИ БОТА ==========
 async def send_exchange_notification(context, user_id, item):
     user_data = db.get_user(user_id)
     
@@ -252,19 +256,20 @@ async def send_exchange_notification(context, user_id, item):
         print(f"❌ Ошибка уведомления: {e}")
 
 async def send_party_announcement(context, user_id, mmr):
-    user = await context.bot.get_chat(user_id)
+    try:
+        user = await context.bot.get_chat(user_id)
+    except:
+        user = None
+    
     user_data = db.get_user(user_id)
     level = db.get_user_level(user_data['total_farmed'])
     
     message = (
         f"🔍 <b>НОВЫЙ ИГРОК ИЩЕТ ТИМУ!</b>\n\n"
-        f"👤 <b>Игрок:</b> {user.first_name}\n"
+        f"👤 <b>Игрок:</b> {user.first_name if user else 'Неизвестно'}\n"
     )
     
-    if user.last_name:
-        message += f"👤 <b>Фамилия:</b> {user.last_name}\n"
-    
-    if user.username:
+    if user and user.username:
         message += f"📱 <b>Telegram:</b> @{user.username}\n"
     
     message += (
@@ -272,19 +277,13 @@ async def send_party_announcement(context, user_id, mmr):
         f"🆔 <b>ID:</b> <code>{user_id}</code>\n\n"
     )
     
-    if user_data['display_name']:
+    if user_data.get('display_name'):
         message += f"📝 <b>Имя в боте:</b> {user_data['display_name']}\n"
     
     message += (
         f"💰 <b>Баланс:</b> {user_data['coins']} коинов\n"
         f"🏆 <b>Уровень:</b> {level['name']}\n\n"
-        f"💬 <b>Как связаться:</b>\n"
     )
-    
-    if user.username:
-        message += f"📨 Telegram: @{user.username}\n"
-    
-    message += f"🤖 Бот: /write {user_id}"
     
     try:
         await context.bot.send_message(
@@ -328,10 +327,7 @@ async def farm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     can_farm, msg = db.can_farm(user.id)
     
     if not can_farm:
-        try:
-            await update.message.reply_text(f"❌ {msg}")
-        except:
-            pass
+        await update.message.reply_text(f"❌ {msg}")
         return
     
     coins = random.randint(1, 2)
@@ -352,10 +348,7 @@ async def farm(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"⏰ <b>Следующий:</b> через {FARM_COOLDOWN}ч"
     )
     
-    try:
-        await update.message.reply_text(message, parse_mode='HTML')
-    except:
-        pass
+    await update.message.reply_text(message, parse_mode='HTML')
 
 async def balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -372,10 +365,7 @@ async def balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"🎁 <b>Подарков:</b> {user_data['admin_gifted']}"
     )
     
-    try:
-        await update.message.reply_text(message, parse_mode='HTML')
-    except:
-        pass
+    await update.message.reply_text(message, parse_mode='HTML')
 
 async def level(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -400,30 +390,22 @@ async def level(update: Update, context: ContextTypes.DEFAULT_TYPE):
         need = next_level['min_coins'] - user_data['total_farmed']
         message += f"📈 <b>До след.:</b> {need} коинов"
     
-    try:
-        await update.message.reply_text(message, parse_mode='HTML')
-    except:
-        pass
+    await update.message.reply_text(message, parse_mode='HTML')
 
 async def shop(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.chat.type != "private":
-        try:
-            await update.message.reply_text(
-                "🛍️ <b>Магазин доступен только в личных сообщениях с ботом!</b>\n\n"
-                "👉 Напишите мне в ЛС",
-                parse_mode='HTML'
-            )
-        except:
-            pass
+        await update.message.reply_text(
+            "🛍️ <b>Магазин доступен только в личных сообщениях с ботом!</b>\n\n"
+            "👉 Напишите мне в ЛС",
+            parse_mode='HTML'
+        )
         return
     
     user = update.effective_user
     db.update_user(user.id)
     user_data = db.get_user(user.id)
     
-    message = (
-        f"🏪 <b>МАГАЗИН ПРЕДМЕТОВ</b>\n\n"
-    )
+    message = f"🏪 <b>МАГАЗИН ПРЕДМЕТОВ</b>\n\n"
     
     for item_id, item in SHOP_ITEMS.items():
         message += (
@@ -435,10 +417,7 @@ async def shop(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     message += f"💵 <b>Ваш баланс:</b> {user_data['coins']} коинов"
     
-    try:
-        await update.message.reply_text(message, parse_mode='HTML')
-    except:
-        pass
+    await update.message.reply_text(message, parse_mode='HTML')
 
 async def buy_item(update: Update, context: ContextTypes.DEFAULT_TYPE, item_id: int):
     user = update.effective_user
@@ -454,15 +433,9 @@ async def buy_item(update: Update, context: ContextTypes.DEFAULT_TYPE, item_id: 
             f"📦 Предмет в инвентаре\n"
             f"🔧 /inventory для обмена"
         )
-        try:
-            await update.message.reply_text(message, parse_mode='HTML')
-        except:
-            pass
+        await update.message.reply_text(message, parse_mode='HTML')
     else:
-        try:
-            await update.message.reply_text(f"❌ {result}")
-        except:
-            pass
+        await update.message.reply_text(f"❌ {result}")
 
 async def inventory(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -470,14 +443,10 @@ async def inventory(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_data = db.get_user(user.id)
     
     if not user_data['inventory']:
-        message = (
-            f"📦 <b>ИНВЕНТАРЬ ПУСТ</b>\n\n"
-            f"🛍️ /shop"
+        await update.message.reply_text(
+            f"📦 <b>ИНВЕНТАРЬ ПУСТ</b>\n\n🛍️ /shop",
+            parse_mode='HTML'
         )
-        try:
-            await update.message.reply_text(message, parse_mode='HTML')
-        except:
-            pass
         return
     
     keyboard = []
@@ -501,72 +470,56 @@ async def inventory(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"💡 Нажмите на предмет для обмена"
     )
     
-    try:
-        await update.message.reply_text(
-            message,
-            reply_markup=InlineKeyboardMarkup(keyboard),
-            parse_mode='HTML'
-        )
-    except:
-        pass
+    await update.message.reply_text(
+        message,
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode='HTML'
+    )
 
 async def party(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     db.update_user(user.id)
     
     if not context.args:
-        message = (
+        await update.message.reply_text(
             f"🎯 <b>ПОИСК ТИМЫ ДЛЯ DOTA 2</b>\n\n"
             f"📝 <b>Использование:</b>\n"
             f"<code>/party [ваш MMR]</code>\n\n"
             f"📋 <b>Пример:</b>\n"
-            f"<code>/party 4500</code>"
+            f"<code>/party 4500</code>",
+            parse_mode='HTML'
         )
-        try:
-            await update.message.reply_text(message, parse_mode='HTML')
-        except:
-            pass
         return
     
     try:
         mmr = int(context.args[0])
         await send_party_announcement(context, user.id, mmr)
         
-        message = (
+        await update.message.reply_text(
             f"✅ <b>ЗАЯВКА ПРИНЯТА!</b>\n\n"
             f"👤 <b>Игрок:</b> {user.first_name}\n"
             f"📊 <b>MMR:</b> {mmr}\n\n"
             f"📨 Админ получил вашу заявку\n"
-            f"👥 Скоро поможем найти тиму!"
+            f"👥 Скоро поможем найти тиму!",
+            parse_mode='HTML'
         )
         
-        try:
-            await update.message.reply_text(message, parse_mode='HTML')
-        except:
-            pass
-        
     except ValueError:
-        try:
-            await update.message.reply_text("❌ Укажите число MMR")
-        except:
-            pass
+        await update.message.reply_text("❌ Укажите число MMR")
 
 async def write(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     db.update_user(user.id)
     
     if len(context.args) < 2:
-        message = (
+        await update.message.reply_text(
             f"📨 <b>НАПИСАТЬ ИГРОКУ</b>\n\n"
             f"📝 <b>Использование:</b>\n"
             f"<code>/write [ID_игрока] [сообщение]</code>\n\n"
             f"📋 <b>Пример:</b>\n"
-            f"<code>/write 6443845944 Привет!</code>"
+            f"<code>/write 6443845944 Привет!</code>",
+            parse_mode='HTML'
         )
-        try:
-            await update.message.reply_text(message, parse_mode='HTML')
-        except:
-            pass
         return
     
     try:
@@ -591,29 +544,18 @@ async def write(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 parse_mode='HTML'
             )
             
-            confirmation = (
+            await update.message.reply_text(
                 f"✅ <b>СООБЩЕНИЕ ОТПРАВЛЕНО!</b>\n\n"
                 f"👤 <b>Игроку с ID:</b> {target_id}\n"
-                f"💬 <b>Ваше сообщение:</b>\n<code>{message_text}</code>"
+                f"💬 <b>Ваше сообщение:</b>\n<code>{message_text}</code>",
+                parse_mode='HTML'
             )
             
-            try:
-                await update.message.reply_text(confirmation, parse_mode='HTML')
-            except:
-                pass
-            
         except Exception as e:
-            error_msg = "❌ Не удалось отправить сообщение. Игрок может заблокировать бота."
-            try:
-                await update.message.reply_text(error_msg)
-            except:
-                pass
+            await update.message.reply_text("❌ Не удалось отправить сообщение. Игрок может заблокировать бота.")
             
     except ValueError:
-        try:
-            await update.message.reply_text("❌ ID должен быть числом")
-        except:
-            pass
+        await update.message.reply_text("❌ ID должен быть числом")
 
 async def profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -632,7 +574,7 @@ async def profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user.username:
         message += f"📱 <b>Telegram:</b> @{user.username}\n"
     
-    if user_data['display_name']:
+    if user_data.get('display_name'):
         message += f"📝 <b>Имя в боте:</b> {user_data['display_name']}\n"
     
     message += (
@@ -645,10 +587,7 @@ async def profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"📦 <b>Предметов:</b> {len(user_data['inventory'])}"
     )
     
-    try:
-        await update.message.reply_text(message, parse_mode='HTML')
-    except:
-        pass
+    await update.message.reply_text(message, parse_mode='HTML')
 
 async def users(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -663,39 +602,29 @@ async def users(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if (datetime.now() - last_active).days == 0:
                 active_today += 1
         
-        message = (
+        await update.message.reply_text(
             f"📊 <b>СТАТИСТИКА ПОЛЬЗОВАТЕЛЕЙ</b>\n\n"
             f"👥 <b>Всего игроков:</b> {total_users}\n"
             f"🟢 <b>Активных сегодня:</b> {active_today}\n\n"
             f"🔍 <b>Поиск игроков:</b>\n"
             f"<code>/users [имя или username]</code>\n\n"
             f"📋 <b>Пример:</b>\n"
-            f"<code>/users matvei</code>"
+            f"<code>/users matvei</code>",
+            parse_mode='HTML'
         )
-        
-        try:
-            await update.message.reply_text(message, parse_mode='HTML')
-        except:
-            pass
         return
     
     search_term = " ".join(context.args)
     results = db.search_users(search_term)
     
     if not results:
-        message = (
-            f"🔍 <b>НИЧЕГО НЕ НАЙДЕНО</b>\n\n"
-            f"🔍 <b>Поиск:</b> {search_term}"
+        await update.message.reply_text(
+            f"🔍 <b>НИЧЕГО НЕ НАЙДЕНО</b>\n\n🔍 <b>Поиск:</b> {search_term}",
+            parse_mode='HTML'
         )
-        try:
-            await update.message.reply_text(message, parse_mode='HTML')
-        except:
-            pass
         return
     
-    message = (
-        f"✅ <b>НАЙДЕНО {len(results)} ИГРОКОВ</b>\n\n"
-    )
+    message = f"✅ <b>НАЙДЕНО {len(results)} ИГРОКОВ</b>\n\n"
     
     for i, (user_id, user_data) in enumerate(results[:10], 1):
         if user_data.get('username'):
@@ -718,35 +647,26 @@ async def users(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(results) > 10:
         message += f"\n📄 ... и еще {len(results) - 10} игроков"
     
-    try:
-        await update.message.reply_text(message, parse_mode='HTML')
-    except:
-        pass
+    await update.message.reply_text(message, parse_mode='HTML')
 
 def is_admin(user_id):
     return user_id == ADMIN_ID
 
 async def give(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
-        try:
-            await update.message.reply_text("❌ Только для админа!")
-        except:
-            pass
+        await update.message.reply_text("❌ Только для админа!")
         return
     
     if not update.message.reply_to_message or not context.args:
-        message = (
+        await update.message.reply_text(
             f"💰 <b>ВЫДАЧА КОИНОВ</b>\n\n"
             f"📝 <b>Использование:</b>\n"
             f"1. Ответьте на сообщение игрока\n"
             f"2. Напишите: <code>/give [сумма]</code>\n\n"
             f"📋 <b>Пример:</b>\n"
-            f"<code>/give 100</code>"
+            f"<code>/give 100</code>",
+            parse_mode='HTML'
         )
-        try:
-            await update.message.reply_text(message, parse_mode='HTML')
-        except:
-            pass
         return
     
     try:
@@ -754,69 +674,43 @@ async def give(update: Update, context: ContextTypes.DEFAULT_TYPE):
         target_user = update.message.reply_to_message.from_user
         new_balance = db.add_coins(target_user.id, amount, from_farm=False, from_admin=True)
         
-        message = (
+        await update.message.reply_text(
             f"✅ <b>КОИНЫ ВЫДАНЫ!</b>\n\n"
             f"👤 <b>Игроку:</b> {target_user.first_name}\n"
             f"💰 <b>Сумма:</b> {amount} коинов\n"
-            f"💳 <b>Новый баланс:</b> {new_balance} коинов"
+            f"💳 <b>Новый баланс:</b> {new_balance} коинов",
+            parse_mode='HTML'
         )
         
-        try:
-            await update.message.reply_text(message, parse_mode='HTML')
-        except:
-            pass
-        
     except:
-        try:
-            await update.message.reply_text("❌ Ошибка! Укажите число")
-        except:
-            pass
+        await update.message.reply_text("❌ Ошибка! Укажите число")
 
 async def announce(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
-        try:
-            await update.message.reply_text("❌ Только для админа!")
-        except:
-            pass
+        await update.message.reply_text("❌ Только для админа!")
         return
     
     if not context.args:
-        try:
-            await update.message.reply_text("❌ Формат: /announce [текст]")
-        except:
-            pass
+        await update.message.reply_text("❌ Формат: /announce [текст]")
         return
     
     text = " ".join(context.args)
-    message = (
-        f"📣 <b>ОБЪЯВЛЕНИЕ ОТ АДМИНА</b>\n\n"
-        f"{text}"
+    await update.message.reply_text(
+        f"📣 <b>ОБЪЯВЛЕНИЕ ОТ АДМИНА</b>\n\n{text}",
+        parse_mode='HTML'
     )
-    try:
-        await update.message.reply_text(message, parse_mode='HTML')
-    except:
-        pass
 
 async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
-        try:
-            await update.message.reply_text("❌ Только для админа!")
-        except:
-            pass
+        await update.message.reply_text("❌ Только для админа!")
         return
     
     if not context.args:
-        try:
-            await update.message.reply_text("❌ Формат: /broadcast [текст]")
-        except:
-            pass
+        await update.message.reply_text("❌ Формат: /broadcast [текст]")
         return
     
     text = " ".join(context.args)
-    message = (
-        f"📨 <b>СООБЩЕНИЕ ОТ АДМИНА</b>\n\n"
-        f"{text}"
-    )
+    message = f"📨 <b>СООБЩЕНИЕ ОТ АДМИНА</b>\n\n{text}"
     
     sent = 0
     failed = 0
@@ -832,59 +726,42 @@ async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except:
             failed += 1
     
-    result = (
+    await update.message.reply_text(
         f"📨 <b>РАССЫЛКА ЗАВЕРШЕНА</b>\n\n"
         f"✅ <b>Отправлено:</b> {sent} игрокам\n"
-        f"❌ <b>Не отправлено:</b> {failed} игрокам"
+        f"❌ <b>Не отправлено:</b> {failed} игрокам",
+        parse_mode='HTML'
     )
-    
-    try:
-        await update.message.reply_text(result, parse_mode='HTML')
-    except:
-        pass
 
 async def compensation(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
-        try:
-            await update.message.reply_text("❌ Только для админа!")
-        except:
-            pass
+        await update.message.reply_text("❌ Только для админа!")
         return
     
     total = db.add_compensation_to_all(COMPENSATION_AMOUNT)
     
-    message = (
+    await update.message.reply_text(
         f"💰 <b>КОМПЕНСАЦИЯ ВЫДАНА!</b>\n\n"
         f"👥 <b>Игроков:</b> {total}\n"
         f"🎁 <b>Каждому:</b> {COMPENSATION_AMOUNT} коинов\n"
-        f"💰 <b>Всего:</b> {total * COMPENSATION_AMOUNT} коинов"
+        f"💰 <b>Всего:</b> {total * COMPENSATION_AMOUNT} коинов",
+        parse_mode='HTML'
     )
-    
-    try:
-        await update.message.reply_text(message, parse_mode='HTML')
-    except:
-        pass
 
 async def removeitem(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
-        try:
-            await update.message.reply_text("❌ Только для админа!")
-        except:
-            pass
+        await update.message.reply_text("❌ Только для админа!")
         return
     
     if len(context.args) != 2:
-        message = (
+        await update.message.reply_text(
             f"🗑️ <b>УДАЛЕНИЕ ПРЕДМЕТА</b>\n\n"
             f"📝 <b>Использование:</b>\n"
             f"<code>/removeitem [ID_игрока] [номер_предмета]</code>\n\n"
             f"📋 <b>Пример:</b>\n"
-            f"<code>/removeitem 6443845944 0</code>"
+            f"<code>/removeitem 6443845944 0</code>",
+            parse_mode='HTML'
         )
-        try:
-            await update.message.reply_text(message, parse_mode='HTML')
-        except:
-            pass
         return
     
     try:
@@ -897,35 +774,22 @@ async def removeitem(update: Update, context: ContextTypes.DEFAULT_TYPE):
             user_data = db.get_user(user_id)
             user_name = f"@{user_data.get('username', '')}" if user_data.get('username') else f"ID:{user_id}"
             
-            message = (
+            await update.message.reply_text(
                 f"✅ <b>ПРЕДМЕТ УДАЛЕН!</b>\n\n"
                 f"🎁 <b>Предмет:</b> {item['name']}\n"
                 f"👤 <b>От игрока:</b> {user_name}\n"
-                f"💰 <b>Стоимость:</b> {item['price']} коинов"
+                f"💰 <b>Стоимость:</b> {item['price']} коинов",
+                parse_mode='HTML'
             )
-            
-            try:
-                await update.message.reply_text(message, parse_mode='HTML')
-            except:
-                pass
         else:
-            try:
-                await update.message.reply_text("❌ Не удалось удалить предмет")
-            except:
-                pass
+            await update.message.reply_text("❌ Не удалось удалить предмет")
             
     except (ValueError, IndexError):
-        try:
-            await update.message.reply_text("❌ Ошибка! Проверьте ID и номер предмета")
-        except:
-            pass
+        await update.message.reply_text("❌ Ошибка! Проверьте ID и номер предмета")
 
 async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
-        try:
-            await update.message.reply_text("❌ Только для админа!")
-        except:
-            pass
+        await update.message.reply_text("❌ Только для админа!")
         return
     
     total_players = len(db.data)
@@ -947,60 +811,50 @@ async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("❌ Закрыть", callback_data="close")]
     ]
     
-    try:
-        await update.message.reply_text(
-            message,
-            reply_markup=InlineKeyboardMarkup(keyboard),
-            parse_mode='HTML'
-        )
-    except:
-        pass
+    await update.message.reply_text(
+        message,
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode='HTML'
+    )
 
 async def restore_db(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """ПОЛНАЯ ЗАМЕНА текущей базы на присланный файл"""
     if not is_admin(update.effective_user.id):
         await update.message.reply_text("❌ Только для админа!")
         return
     
     if not update.message.document:
-        message = (
+        await update.message.reply_text(
             f"🔄 <b>ВОССТАНОВЛЕНИЕ БАЗЫ</b>\n\n"
             f"📝 <b>Инструкция:</b>\n"
             f"1. Отправьте файл старой базы (kme_data.json)\n"
             f"2. Напишите команду: /restore_db\n\n"
             f"⚠️ <b>ТЕКУЩАЯ БАЗА БУДЕТ ПОЛНОСТЬЮ ЗАМЕНЕНА!</b>\n"
-            f"💾 Но сначала будет создана её копия\n\n"
-            f"📊 Текущая база: {len(db.data)} игроков"
+            f"💾 Но сначала будет создана её копия",
+            parse_mode='HTML'
         )
-        await update.message.reply_text(message, parse_mode='HTML')
         return
     
     try:
-        # 1. СОХРАНЯЕМ ТЕКУЩУЮ БАЗУ
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        backup_current = f"my_precious_data.json.backup_{timestamp}"
+        backup_current = f"{DB_FILENAME}.backup_{timestamp}"
         
         if os.path.exists(DB_FILENAME):
             with open(DB_FILENAME, 'r', encoding='utf-8') as src:
                 with open(backup_current, 'w', encoding='utf-8') as dst:
                     dst.write(src.read())
         
-        # 2. ЗАГРУЖАЕМ СТАРУЮ БАЗУ
         file = await update.message.document.get_file()
         await file.download_to_drive(DB_FILENAME)
         
-        # 3. ПЕРЕЗАГРУЖАЕМ БАЗУ
         global db
         db = Database(DB_FILENAME)
         
-        # 4. ОТПРАВЛЯЕМ ОТЧЕТ
-        message = (
+        await update.message.reply_text(
             f"✅ <b>БАЗА УСПЕШНО ЗАМЕНЕНА!</b>\n\n"
             f"📊 <b>Новая база:</b> {len(db.data)} игроков\n"
-            f"💾 <b>Сохранена копия старой:</b> {backup_current}"
+            f"💾 <b>Сохранена копия старой:</b> {backup_current}",
+            parse_mode='HTML'
         )
-        
-        await update.message.reply_text(message, parse_mode='HTML')
         
     except Exception as e:
         await update.message.reply_text(f"❌ Ошибка восстановления: {e}")
@@ -1010,17 +864,12 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     
     if query.data == "close":
-        try:
-            await query.delete_message()
-        except:
-            pass
+        await query.delete_message()
         return
     
     if query.data.startswith("view_"):
-        try:
-            await query.edit_message_text("✅ Предмет уже обменян")
-        except:
-            pass
+        await query.edit_message_text("✅ Предмет уже обменян")
+        return
     
     elif query.data.startswith("exchange_"):
         item_index = int(query.data.split("_")[1])
@@ -1029,25 +878,18 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         success, item = db.exchange_item(user.id, item_index)
         
         if success:
-            message = (
+            await query.edit_message_text(
                 f"✅ <b>ПРЕДМЕТ ОТПРАВЛЕН НА ОБМЕН!</b>\n\n"
                 f"🎁 <b>Предмет:</b> {item['name']}\n"
                 f"💰 <b>Стоимость:</b> {item['price']} коинов\n\n"
                 f"📨 Админ получил уведомление\n"
-                f"⏳ Скоро свяжемся для выполнения"
+                f"⏳ Скоро свяжемся для выполнения",
+                parse_mode='HTML'
             )
-            
-            try:
-                await query.edit_message_text(message, parse_mode='HTML')
-                await send_exchange_notification(context, user.id, item)
-            except:
-                pass
-            
+            await send_exchange_notification(context, user.id, item)
         else:
-            try:
-                await query.edit_message_text("❌ Ошибка обмена")
-            except:
-                pass
+            await query.edit_message_text("❌ Ошибка обмена")
+        return
     
     elif query.data == "stats":
         total_players = len(db.data)
@@ -1055,35 +897,25 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         total_items = sum(len(user['inventory']) for user in db.data.values())
         total_farmed = sum(user['total_farmed'] for user in db.data.values())
         
-        message = (
+        await query.edit_message_text(
             f"📈 <b>ПОДРОБНАЯ СТАТИСТИКА</b>\n\n"
             f"👥 <b>Игроков:</b> {total_players}\n"
             f"💰 <b>Коинов:</b> {total_coins}\n"
             f"🎯 <b>Заработано:</b> {total_farmed}\n"
-            f"📦 <b>Предметов:</b> {total_items}"
+            f"📦 <b>Предметов:</b> {total_items}",
+            parse_mode='HTML'
         )
         
-        try:
-            await query.edit_message_text(message, parse_mode='HTML')
-        except:
-            pass
-        
     elif query.data == "comp":
-        try:
-            await query.edit_message_text(
-                "💰 Используйте:\n<code>/compensation</code>",
-                parse_mode='HTML'
-            )
-        except:
-            pass
+        await query.edit_message_text(
+            "💰 Используйте:\n<code>/compensation</code>",
+            parse_mode='HTML'
+        )
     elif query.data == "broadcast":
-        try:
-            await query.edit_message_text(
-                "📢 Используйте:\n<code>/broadcast [текст]</code>",
-                parse_mode='HTML'
-            )
-        except:
-            pass
+        await query.edit_message_text(
+            "📢 Используйте:\n<code>/broadcast [текст]</code>",
+            parse_mode='HTML'
+        )
 
 def main():
     print("=" * 50)
@@ -1132,7 +964,7 @@ def main():
     application.add_handler(CallbackQueryHandler(button_handler))
     
     print("✅ Бот запущен!")
-    print(f"📁 Файл базы: {DB_FILENAME} (BotHost его не трогает!)")
+    print(f"📁 Файл базы: {DB_FILENAME}")
     print("🔄 Для восстановления БД: отправьте файл и /restore_db")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
